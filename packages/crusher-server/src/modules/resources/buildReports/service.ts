@@ -256,6 +256,10 @@ export class BuildReportService {
 		]);
 	}
 
+	async incrementBuildReportCounts(reportId: number, incrementCount) {
+		return this.dbManager.update("UPDATE public.job_reports SET total_test_count = total_test_count + ? WHERE id=?", [incrementCount, reportId]);
+	}
+
 	@CamelizeResponse()
 	async getBuildReportRecord(reportId: number): Promise<KeysToCamelCase<IBuildReportTable> | null> {
 		return this.dbManager.fetchSingleRow("SELECT * FROM public.job_reports WHERE id = ?", [reportId]);

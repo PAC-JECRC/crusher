@@ -101,22 +101,25 @@ class TestsRunner {
 		const addTestInstancePromiseArr = testInstances.map((testInstance) => {
 			if (!testInstance.parentTestInstanceId) {
 				flowChildrens.push(
-					this.createExecutionTaskFlow({
-						actions: JSON.parse(testInstance.testInfo.events),
-						nextTestDependencies: this._getNextTestInstancesDependencyArr(testInstance, testInstances),
-						config: {
-							browser: testInstance.browser as any,
-							shouldRecordVideo: buildTaskInfo.config.shouldRecordVideo,
+					this.createExecutionTaskFlow(
+						{
+							actions: JSON.parse(testInstance.testInfo.events),
+							nextTestDependencies: this._getNextTestInstancesDependencyArr(testInstance, testInstances),
+							config: {
+								browser: testInstance.browser as any,
+								shouldRecordVideo: buildTaskInfo.config.shouldRecordVideo,
+							},
+							buildId: buildTaskInfo.buildId,
+							testInstanceId: testInstance.id,
+							testName: testInstance.testInfo.name,
+							buildTestCount: testInstances.length,
+							startingStorageState: null,
+							startingPersistentContext: null,
+							// Crusher-context tree
+							context: buildTaskInfo.context,
 						},
-						buildId: buildTaskInfo.buildId,
-						testInstanceId: testInstance.id,
-						testName: testInstance.testInfo.name,
-						buildTestCount: testInstances.length,
-						startingStorageState: null,
-						startingPersistentContext: null,
-						// Crusher-context tree
-						context: buildTaskInfo.context,
-					}, buildTaskInfo.host),
+						buildTaskInfo.host,
+					),
 				);
 			}
 		});
@@ -222,28 +225,49 @@ class TestsRunner {
 	}
 
 	private async _getTestMapFromArr(testIdArr: Array<number>): Promise<{ [id: number]: KeysToCamelCase<ITestTable> }> {
-		const filtered =  testIdArr.reduce((prev, testId) => {
+		const filtered = testIdArr.reduce((prev, testId) => {
 			return { ...prev, [testId]: testId };
 		}, {});
 
-		const testsArr = await Promise.all(Object.values(filtered).map((testId: number) => {
-			return this.testService.getTest(testId);
-		}));
+		const testsArr = await Promise.all(
+			Object.values(filtered).map((testId: number) => {
+				return this.testService.getTest(testId);
+			}),
+		);
 
 		return testsArr.reduce((prev, test) => {
 			return { ...prev, [test.id]: test };
 		});
 	}
 
-	async runParameterizedTestsInsideBuild(tests: ITestCompleteQueuePayload["parameterizedTests"], buildId: number ) {
+	async setupParameterizedTestsInsideBuild(
+		tests: ITestCompleteQueuePayload["parameterizedTests"],
+		jobData: ITestCompleteQueuePayload["buildExecutionPayload"],
+	) {
 		// @Note: Consider how this will be achieved for RUN_AFTER_TEST scenerios
-		const build = await this.buildsService.getBuild(buildId);
+		const build = await this.buildsService.getBuild(jobData.buildId);
 		const testsMap = await this._getTestMapFromArr(tests.map((test) => test.testId));
 
 		const testsArr = tests.map((test) => {
-			return  { ...testsMap[test.testId], isFirstLevelTest: true, postTestList: [], parentTestId: null, context: test.testContext }
+			return { ...testsMap[test.testId], isFirstLevelTest: true, postTestList: [], parentTestId: null, context: test.testContext };
 		});
+		const buildReportRecord = await this.buildReportService.getBuildReportRecord(build.latestReportId);
 
+		await this.buildReportService.incrementBuildReportCounts(buildReportRecord.id, testsArr.length);
+
+		const jobMeta = typeof build.meta === "string" ? JSON.parse(build.meta) : build.meta;
+
+		const testsResultsSetsInsertPromiseArr = testsArr.map(async (testInstance) => {
+			const referenceInstance = await this.buildTestInstanceService.getReferenceInstance(testInstance.id);
+			return this.buildTestInstanceService.createBuildTestInstanceResultSet({
+				reportId: buildReportRecord.id,
+				instanceId: testInstance.id,
+				targetInstanceId: jobMeta && jobMeta.disableBaseLineComparisions ? testInstance.id : referenceInstance.id,
+			});
+		});
+		await Promise.all(testsResultsSetsInsertPromiseArr);
+
+		return testsArr;
 		// <--- Continue from here ---->
 	}
 
